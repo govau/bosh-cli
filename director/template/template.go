@@ -26,7 +26,7 @@ func NewTemplate(bytes []byte) Template {
 	return Template{bytes: bytes}
 }
 
-func (t Template) Evaluate(vars Variables, op patch.Op, opts EvaluateOpts) ([]byte, error) {
+func (t Template) EvaluateWithAdditional(vars Variables, op patch.Op, opts EvaluateOpts, additionalVals map[string]string) ([]byte, error) {
 	var obj interface{}
 
 	err := yaml.Unmarshal(t.bytes, &obj)
@@ -41,7 +41,7 @@ func (t Template) Evaluate(vars Variables, op patch.Op, opts EvaluateOpts) ([]by
 		}
 	}
 
-	obj, err = t.interpolateRoot(obj, newVarsTracker(vars, opts.ExpectAllKeys, opts.ExpectAllVarsUsed))
+	obj, err = t.interpolateRoot(obj, additionalVals, newVarsTracker(vars, opts.ExpectAllKeys, opts.ExpectAllVarsUsed))
 	if err != nil {
 		return []byte{}, err
 	}
@@ -65,13 +65,17 @@ func (t Template) Evaluate(vars Variables, op patch.Op, opts EvaluateOpts) ([]by
 	return bytes, nil
 }
 
-func (t Template) interpolateRoot(obj interface{}, tracker varsTracker) (interface{}, error) {
+func (t Template) Evaluate(vars Variables, op patch.Op, opts EvaluateOpts) ([]byte, error) {
+	return t.EvaluateWithAdditional(vars, op, opts, nil)
+}
+
+func (t Template) interpolateRoot(obj interface{}, additionalVals map[string]string, tracker varsTracker) (interface{}, error) {
 	err := tracker.ExtractDefinitions(obj)
 	if err != nil {
 		return nil, err
 	}
 
-	obj, err = interpolator{}.Interpolate(obj, varsLookup{tracker})
+	obj, err = interpolator{}.Interpolate(obj, additionalVals, varsLookup{tracker})
 	if err != nil {
 		return nil, err
 	}
@@ -91,16 +95,16 @@ var (
 	interpolationAnchoredRegex = regexp.MustCompile("\\A" + interpolationRegex.String() + "\\z")
 )
 
-func (i interpolator) Interpolate(node interface{}, varsLookup varsLookup) (interface{}, error) {
+func (i interpolator) Interpolate(node interface{}, additionalVals map[string]string, varsLookup varsLookup) (interface{}, error) {
 	switch typedNode := node.(type) {
 	case map[interface{}]interface{}:
 		for k, v := range typedNode {
-			evaluatedValue, err := i.Interpolate(v, varsLookup)
+			evaluatedValue, err := i.Interpolate(v, additionalVals, varsLookup)
 			if err != nil {
 				return nil, err
 			}
 
-			evaluatedKey, err := i.Interpolate(k, varsLookup)
+			evaluatedKey, err := i.Interpolate(k, additionalVals, varsLookup)
 			if err != nil {
 				return nil, err
 			}
@@ -112,7 +116,7 @@ func (i interpolator) Interpolate(node interface{}, varsLookup varsLookup) (inte
 	case []interface{}:
 		for idx, x := range typedNode {
 			var err error
-			typedNode[idx], err = i.Interpolate(x, varsLookup)
+			typedNode[idx], err = i.Interpolate(x, additionalVals, varsLookup)
 			if err != nil {
 				return nil, err
 			}
@@ -120,6 +124,15 @@ func (i interpolator) Interpolate(node interface{}, varsLookup varsLookup) (inte
 
 	case string:
 		for _, name := range i.extractVarNames(typedNode) {
+			if additionalVals != nil {
+				extraVal := additionalVals[name]
+				if extraVal != "" {
+					// If we find one, then append this *after* the real value, wit, then continue processing as normal
+					// This is useful for adding additional legacy CA certs.
+					typedNode = strings.Replace(typedNode, fmt.Sprintf("((%s))", name), fmt.Sprintf("((%s))\n%s", name, extraVal), -1)
+				}
+			}
+
 			foundVal, found, err := varsLookup.Get(name)
 			if err != nil {
 				return nil, bosherr.WrapErrorf(err, "Finding variable '%s'", name)
@@ -224,7 +237,7 @@ func (t varsTracker) Get(name string) (interface{}, bool, error) {
 
 	def := t.defs.Find(name)
 
-	def.Options, err = interpolator{}.Interpolate(def.Options, varsLookup{defVarTracker})
+	def.Options, err = interpolator{}.Interpolate(def.Options, nil, varsLookup{defVarTracker})
 	if err != nil {
 		return nil, false, bosherr.WrapErrorf(err, "Interpolating variable '%s' definition options", name)
 	}

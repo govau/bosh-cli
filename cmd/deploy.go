@@ -12,24 +12,48 @@ type DeployCmd struct {
 	ui              boshui.UI
 	deployment      boshdir.Deployment
 	releaseUploader ReleaseUploader
+	ccs             CertificateConfigurationServer
 }
 
 type ReleaseUploader interface {
 	UploadReleases([]byte) ([]byte, error)
 }
 
+type CertificateConfigurationServer interface {
+	// PrepareForNewDeploy is expected to:
+	// 1. Delete any certificates that are not CAs, they are always safe to regenerate.
+	// 2. For any certificates that are CAs, and only one active, create new, make it active, mark old as transitional.
+	// 3. Return a map of variables (such as foo_ca.certificate) that contains all the old CAs that are still in transitional state.
+	PrepareForNewDeploy() (map[string]string, error)
+
+	// PostSuccessfulDeploy is expected to:
+	// 1. Delete any certificates that are not CAs, they are always safe to regenerate.
+	// 2. For any certificates that are CAs, mark the transitional ones as not current.
+	PostSuccessfulDeploy() error
+}
+
 func NewDeployCmd(
 	ui boshui.UI,
 	deployment boshdir.Deployment,
 	releaseUploader ReleaseUploader,
+	ccs CertificateConfigurationServer,
 ) DeployCmd {
-	return DeployCmd{ui, deployment, releaseUploader}
+	return DeployCmd{ui, deployment, releaseUploader, ccs}
 }
 
 func (c DeployCmd) Run(opts DeployOpts) error {
 	tpl := boshtpl.NewTemplate(opts.Args.Manifest.Bytes)
 
-	bytes, err := tpl.Evaluate(opts.VarFlags.AsVariables(), opts.OpsFlags.AsOp(), boshtpl.EvaluateOpts{})
+	var additionalVals map[string]string
+	if opts.ProgressiveCertRotation {
+		var err error
+		additionalVals, err = c.ccs.PrepareForNewDeploy()
+		if err != nil {
+			return err
+		}
+	}
+
+	bytes, err := tpl.EvaluateWithAdditional(opts.VarFlags.AsVariables(), opts.OpsFlags.AsOp(), boshtpl.EvaluateOpts{}, additionalVals)
 	if err != nil {
 		return bosherr.WrapErrorf(err, "Evaluating manifest")
 	}
@@ -68,7 +92,19 @@ func (c DeployCmd) Run(opts DeployOpts) error {
 		Diff:                    deploymentDiff,
 	}
 
-	return c.deployment.Update(bytes, updateOpts)
+	err = c.deployment.Update(bytes, updateOpts)
+	if err != nil {
+		return err
+	}
+
+	if opts.ProgressiveCertRotation {
+		err = c.ccs.PostSuccessfulDeploy()
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (c DeployCmd) checkDeploymentName(bytes []byte) error {
