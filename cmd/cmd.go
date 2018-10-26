@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/cppforlife/go-patch/patch"
@@ -306,7 +307,18 @@ func (c Cmd) Execute() (cmdErr error) {
 	case *DeployOpts:
 		director, deployment := c.directorAndDeployment()
 		releaseManager := c.releaseManager(director)
-		return NewDeployCmd(deps.UI, deployment, releaseManager).Run(*opts)
+		dirInfo, err := director.Info()
+		if err != nil {
+			return err
+		}
+		return NewDeployCmd(deps.UI, deployment, releaseManager, &CredhubRotator{
+			Prefix:                 fmt.Sprintf("/%s/%s", dirInfo.Name, deployment.Name()),
+			CredhubBaseURL:         os.Getenv("CREDHUB_SERVER"),
+			CredhubCACerts:         os.Getenv("CREDHUB_CA_CERT"),
+			CredhubUAAClient:       os.Getenv("CREDHUB_CLIENT"),
+			CredhubUAAClientSecret: os.Getenv("CREDHUB_SECRET"),
+			UI: deps.UI,
+		}).Run(*opts)
 
 	case *StartOpts:
 		return NewStartCmd(deps.UI, c.deployment()).Run(*opts)
