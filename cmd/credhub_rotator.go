@@ -12,7 +12,7 @@ import (
 /*
 To kick-off you need:
 
-1. credhub set -n /bosh-lite/cf/credential_rotation_action -t value -v create-and-deploy-transitional-cas
+1. credhub set -n /main/cf/credential_rotation_action -t value -v create-and-deploy-transitional-cas
 2. bosh deploy ... --progressive-certificate-rotation
 */
 
@@ -244,7 +244,7 @@ func (c *CredhubRotator) prepareForRemoveLegacyCAs(chc credhubClient) (map[strin
 			}
 		}
 		if !hasTransitional {
-			c.UI.PrintLinef("No transitional CAL found for:", certName)
+			c.UI.PrintLinef("No transitional CA found for: %s", certName)
 			continue
 		}
 
@@ -254,7 +254,7 @@ func (c *CredhubRotator) prepareForRemoveLegacyCAs(chc credhubClient) (map[strin
 			return nil, err
 		}
 
-		c.UI.PrintLinef("Removing transitional flags for:", certName)
+		c.UI.PrintLinef("Removing transitional flags for: %s", certName)
 		err = chc.MakeThisOneTransitional(certID, "")
 		if err != nil {
 			return nil, err
