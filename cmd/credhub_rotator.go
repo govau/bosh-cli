@@ -111,7 +111,7 @@ func (c *CredhubRotator) prepareForCreateAndDeployTransitionals(chc credhubClien
 		if len(cd.Data) > 1 {
 			c.UI.PrintLinef("More than one active cert found, we won't create new transitional: %s", certName)
 			for _, cvd := range cd.Data {
-				if cvd.Transitional {
+				if !cvd.Transitional { // bosh seems to pick up the transitional one?
 					err = c.setTransitionalInRVMap(rv, certName, cvd)
 					if err != nil {
 						return nil, err
@@ -131,13 +131,13 @@ func (c *CredhubRotator) prepareForCreateAndDeployTransitionals(chc credhubClien
 		}
 
 		// regenerate it
-		newCVD, err := chc.MakeTransitionalCertificate(certID)
+		_, err = chc.MakeTransitionalCertificate(certID)
 		if err != nil {
 			return nil, err
 		}
 
-		// include new in map
-		err = c.setTransitionalInRVMap(rv, certName, newCVD)
+		// include old one in map, as bosh seems to pick up the new one
+		err = c.setTransitionalInRVMap(rv, certName, cd.Data[0])
 		if err != nil {
 			return nil, err
 		}
@@ -218,7 +218,7 @@ func (c *CredhubRotator) prepareForCreateAndDeployChildCerts(chc credhubClient) 
 			transitionalID = oldestID
 		}
 
-		// Mark whatever we figured should be transitional as transitional
+		// Now transitional is the old one, so put that as extra
 		for _, cvd := range cd.Data {
 			if cvd.ID == transitionalID {
 				c.setTransitionalInRVMap(rv, certName, cvd)
